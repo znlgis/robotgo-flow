@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # MinGW 配置与 test.yml 共享相同设置
+      - name: 配置 MinGW-w64 (MSYS2)
+        shell: pwsh
+        run: |
+          # 确保 MSYS2 MinGW-w64 工具链已安装（如未安装则通过 pacman 安装）
+          if (-not (Test-Path "C:\msys64\mingw64\bin\gcc.exe")) {
+            Write-Host "安装 MinGW-w64 工具链..."
+            C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config"
+          }
+          $gccPath = "C:\msys64\mingw64\bin"
+          Write-Host "将 MSYS2 MinGW 路径添加到 PATH: $gccPath"
+          # GITHUB_PATH 会将每个条目前插到系统 PATH（后写先排），顺序很重要
+          "C:\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $gccPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "MSYS2 MinGW GCC 版本:"
+          & "$gccPath\gcc.exe" --version | Select-Object -First 1
+
+      - name: 静态构建 (build.ps1)
+        run: .\scripts\build.ps1
+
+      - name: Build Go DLL
+        run: .\scripts\build.ps1 -Dll
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build Tray app
+        run: dotnet publish src/csharp/RobotgoFlow.Tray/RobotgoFlow.Tray.csproj -c Release -o publish/tray
+
+      - name: Package Tray app
+        shell: pwsh
+        run: Compress-Archive -Path publish/tray/* -DestinationPath robotgo-flow-tray.zip
+
+      - name: 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: robotgo-flow
+          path: src/go/robotgo-flow.exe
+
+      - name: 创建 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        id: create_release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} `
+            --generate-notes `
+            src/go/robotgo-flow.exe
+
+      - name: Upload Tray artifact
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: robotgo-flow-tray.zip
+          asset_name: robotgo-flow-tray-${{ github.ref_name }}-win-x64.zip
+          asset_content_type: application/zip

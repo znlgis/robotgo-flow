@@ -1,0 +1,74 @@
+<Window x:Class="RobotgoFlow.Tray.MiniPanelWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="robotgo-flow" Width="380" MinHeight="120" MaxHeight="500"
+        SizeToContent="Height" WindowStyle="ToolWindow"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="CanResizeWithGrip">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+    </Window.Resources>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 工作流选择 -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="工作流文件" FontSize="12" FontWeight="SemiBold"
+                       Foreground="#333" Margin="0,0,0,4"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <ComboBox Grid.Column="0" Text="{Binding WorkflowPath, UpdateSourceTrigger=LostFocus}"
+                          ItemsSource="{Binding RecentFiles}" IsEditable="True"
+                          Height="26" VerticalContentAlignment="Center"/>
+                <Button Grid.Column="1" Content="..." Width="28" Height="26"
+                        Margin="4,0,0,0" Command="{Binding SelectWorkflowCommand}"
+                        ToolTip="浏览文件"
+                        AutomationProperties.Name="浏览工作流文件"/>
+            </Grid>
+            <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{StaticResource TextSecondary}"
+                       Margin="0,4,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <!-- 变量输入区 -->
+        <ItemsControl Grid.Row="1" ItemsSource="{Binding InputFields}"
+                      Visibility="{Binding HasInputs, Converter={StaticResource BoolToVisibility}}"
+                      Margin="0,10,0,0">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Label}" FontSize="11" Margin="0,0,0,2"/>
+                            <TextBlock Text=" *" Foreground="{StaticResource ErrorRed}" FontSize="11"
+                                       Visibility="{Binding Required, Converter={StaticResource BoolToVisibility}}"/>
+                        </StackPanel>
+                        <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                 Height="26" VerticalContentAlignment="Center"
+                                 ToolTip="{Binding Placeholder}"/>
+                        <TextBlock Text="{Binding ErrorText}" FontSize="10"
+                                   Foreground="{StaticResource ErrorRed}"
+                                   Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- 按钮区 -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button Content="取消" Width="70" Height="28" IsCancel="True"
+                    Command="{Binding CancelCommand}" Margin="0,0,8,0"
+                    AutomationProperties.Name="取消操作"/>
+            <Button Content="开始运行" Width="90" Height="28" IsDefault="True"
+                    Command="{Binding StartExecutionCommand}"
+                    Background="{StaticResource PrimaryGreen}" Foreground="White"
+                    BorderBrush="#3DAF5C"
+                    AutomationProperties.Name="开始运行工作流"/>
+        </StackPanel>
+    </Grid>
+</Window>

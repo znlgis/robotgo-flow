@@ -1,0 +1,123 @@
+# ── Go ──────────────────────────────────────────────
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary (go test -c)
+*.test
+
+# Coverage & profiling
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directory
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# cgo generated headers
+src/go/*.h
+
+# ── .NET / C# ───────────────────────────────────────
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Dd]ebugPublic/
+[Rr]eleasePublic/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Pp]ublish/
+
+# NuGet
+*.nupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Visual Studio cache
+*.dbmdl
+*.jfm
+*.dbproj.schemaview
+*.pfx
+*.publishsettings
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# VSCode
+.vscode/
+
+# ── OS generated ────────────────────────────────────
+
+# Windows
+Thumbs.db
+[Dd]esktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Linux
+*~
+.directory
+
+# ── Environment & secrets ───────────────────────────
+
+.env
+*.env
+*.env.*
+!*.env.example
+appsettings.*.json
+!appsettings.*.json.example
+
+# ── Runtime artifacts ───────────────────────────────
+
+screenshots/
+workflow-error.log
+
+# ── Superpowers ───────────────────────────────────
+
+.superpowers/
+
+# ── Merge artifacts ─────────────────────────────────
+
+*.orig
+*.tmp
+*.bak
+*.swp

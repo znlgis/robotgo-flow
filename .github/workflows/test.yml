@@ -1,0 +1,73 @@
+name: Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: src/go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # MinGW 配置与 release.yml 共享相同设置
+      - name: 配置 MinGW-w64 (MSYS2)
+        shell: pwsh
+        run: |
+          # 确保 MSYS2 MinGW-w64 工具链已安装（如未安装则通过 pacman 安装）
+          if (-not (Test-Path "C:\msys64\mingw64\bin\gcc.exe")) {
+            Write-Host "安装 MinGW-w64 工具链..."
+            C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-pkg-config"
+          }
+          $gccPath = "C:\msys64\mingw64\bin"
+          Write-Host "将 MSYS2 MinGW 路径添加到 PATH: $gccPath"
+          # GITHUB_PATH 会将每个条目前插到系统 PATH（后写先排），顺序很重要
+          "C:\msys64\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $gccPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "MSYS2 MinGW GCC 版本:"
+          & "$gccPath\gcc.exe" --version | Select-Object -First 1
+
+      - name: Verify Go modules
+        working-directory: src/go
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./... -count=1 -timeout=5m
+
+      # NuGet 缓存
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Build C# solution
+        working-directory: src/csharp
+        run: dotnet build RobotgoFlow.Wpf.sln -c Release

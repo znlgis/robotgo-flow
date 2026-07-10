@@ -1,0 +1,12 @@
+<Application x:Class="RobotgoFlow.Tray.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <!-- 全局颜色资源：集中管理，避免各处硬编码 -->
+        <SolidColorBrush x:Key="PrimaryGreen" Color="#4ECC6A"/>
+        <SolidColorBrush x:Key="ErrorRed" Color="#E03E3E"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#888888"/>
+        <SolidColorBrush x:Key="TextDim" Color="#AAAAAA"/>
+        <SolidColorBrush x:Key="BgDark" Color="#1A1A2E"/>
+    </Application.Resources>
+</Application>
