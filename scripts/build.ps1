@@ -28,7 +28,7 @@ try {
         Write-Host "ERROR: Go not found. Please install Go 1.26+" -ForegroundColor Red
         exit 1
     }
-    $goVer = (go version) -replace 'go(\d+\.\d+).*','$1'
+    $goVer = (go version) -replace '^go version go(\d+\.\d+).*','$1'
     if ([version]$goVer -lt [version]"1.26") {
         Write-Error "需要 Go 1.26+，当前版本: $goVer"
         exit 1
