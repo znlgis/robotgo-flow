@@ -63,24 +63,25 @@ jobs:
           name: robotgo-flow
           path: src/go/robotgo-flow.exe
 
-      - name: 创建 GitHub Release
+      - name: 创建或更新 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        id: create_release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.ref_name }} `
-            --generate-notes `
-            src/go/robotgo-flow.exe
+          # 幂等：release 已存在时不再 create（否则报 "already exists"），
+          # 改为直接上传资产并用 --clobber 覆盖同名文件，支持重跑。
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在，跳过创建"
+          } else {
+            gh release create $tag --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
-      - name: Upload Tray artifact
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: robotgo-flow-tray.zip
-          asset_name: robotgo-flow-tray-${{ github.ref_name }}-win-x64.zip
-          asset_content_type: application/zip
+          gh release upload $tag `
+            src/go/robotgo-flow.exe `
+            "robotgo-flow-tray.zip#robotgo-flow-tray-$tag-win-x64.zip" `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
