@@ -60,8 +60,8 @@ public class TrayIcon
         var stopItem = new ToolStripMenuItem("停止");
         stopItem.Click += (_, _) =>
         {
+            // 仅停止当前执行：引擎为进程级单例，不可在此释放
             _execution?.Stop();
-            _execution?.Dispose();
             _progressOverlay?.Hide();
         };
         stopItem.Enabled = false;
@@ -96,16 +96,28 @@ public class TrayIcon
         var exitItem = new ToolStripMenuItem("退出");
         exitItem.Click += (_, _) =>
         {
-            _execution?.Stop();
-            _execution?.Dispose();
-            _progressOverlay?.Close();
-            _miniPanel?.Close();
-            _notifyIcon.Visible = false;
-            _notifyIcon.Dispose();
-            RobotgoNative.Instance.Dispose();
+            Shutdown();
             Application.Current.Shutdown();
         };
         menu.Items.Add(exitItem);
+    }
+
+    /// <summary>释放托盘资源；可重复调用。</summary>
+    private void Shutdown()
+    {
+        _execution?.Stop();
+        _execution?.Dispose();
+        _execution = null;
+        _progressOverlay?.Close();
+        _miniPanel?.Close();
+        if (_notifyIcon is not null)
+        {
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _notifyIcon = null;
+        }
+        // 引擎单例在此统一释放（应用退出）
+        RobotgoNative.Instance.Dispose();
     }
 
     private void ShowMiniPanel()
@@ -115,22 +127,22 @@ public class TrayIcon
             var vm = new MiniPanelViewModel(
                 _loggerFactory.CreateLogger("MiniPanel"),
                 new FileDialogService());
-            _miniPanel = new MiniPanelWindow(vm);
+
+            // 执行服务复用同一个实例：它只订阅引擎事件，
+            // 引擎（RobotgoNative 单例）生命周期由本类持有。
+            _execution ??= new ExecutionService(
+                _loggerFactory.CreateLogger<ExecutionService>(),
+                _progressOverlay!.ViewModel,
+                _progressOverlay,
+                RobotgoNative.Instance);
 
             vm.OnStartRequested += (path, name, fromStep, inputsJson) =>
             {
                 if (string.IsNullOrEmpty(path)) return;
-
-                _execution?.Dispose();
-                _execution = new ExecutionService(
-                    _loggerFactory.CreateLogger<ExecutionService>(),
-                    _progressOverlay!.ViewModel,
-                    _progressOverlay,
-                    (error, screenshot, elapsed, _) => { },
-                    RobotgoNative.Instance);
                 _execution.Start(path, name, fromStep, inputsJson);
             };
 
+            _miniPanel = new MiniPanelWindow(vm);
             _miniPanel.Closed += (_, _) => _miniPanel = null;
         }
 

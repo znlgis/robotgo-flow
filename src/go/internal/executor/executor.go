@@ -175,13 +175,14 @@ func expandVars(s string, vars map[string]string) string {
 	return strings.NewReplacer(pairs...).Replace(s)
 }
 
-// describeAction 返回动作类型+描述映射，供 ProgressCallback 展示。
-func describeAction(cfg config.Action) map[string]string {
+// describeAction 返回动作类型与中文描述，供 ProgressCallback 展示。
+// 动作类型未知时返回 ("unknown", "")。
+func describeAction(cfg config.Action) (actionType, detail string) {
 	t := cfg.ActionType()
 	if t == "" {
-		return map[string]string{"type": "unknown", "detail": ""}
+		return "unknown", ""
 	}
-	return map[string]string{"type": t, "detail": cfg.Label()}
+	return t, cfg.Label()
 }
 
 // runSteps 从指定索引开始执行所有步骤。
@@ -232,11 +233,11 @@ func (e *Executor) runSteps(startIndex int) error {
 			}
 
 			if e.callback != nil {
-				desc := describeAction(actionCfg)
-				e.callback.OnActionStart(i, j, desc["type"], desc["detail"])
+				actionType, detail := describeAction(actionCfg)
+				e.callback.OnActionStart(i, j, actionType, detail)
 			}
 
-			// 根据 OnError 设置确定重试次数
+			// 根据 OnError 设置确定最大尝试次数（含首次执行）
 			retries := 1
 			if e.cfg.Settings.OnError == "retry" {
 				retries = e.cfg.Settings.MaxRetries
@@ -264,7 +265,8 @@ func (e *Executor) runSteps(startIndex int) error {
 
 				// 重试逻辑
 				if e.cfg.Settings.OnError == "retry" && attempt < retries-1 {
-					e.log(LogWarn, "[Retry] 步骤 %q 动作 %d 第 %d/%d 次重试", step.Name, j+1, attempt+1, retries)
+					e.log(LogWarn, "[Retry] 步骤 %q 动作 %d 第 %d/%d 次尝试失败，1 秒后重试: %v",
+						step.Name, j+1, attempt+1, retries, execErr)
 					e.eng.Wait(1000) // 重试前短暂暂停
 					continue
 				}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -118,23 +119,22 @@ func cmdRun(args []string) {
 	// 采集运行时变量 (CLI 下使用 stdin 输入)
 	if len(cfg.Inputs) > 0 {
 		fmt.Println("═══ 采集运行时变量 ═══")
+		// 先一次性采集全部变量，再统一替换占位符：
+		// 逐项替换会让后输入的变量值被先前值中的 $input. 文本二次替换。
+		values := make(map[string]string, len(cfg.Inputs))
 		for _, input := range cfg.Inputs {
-			if input.Mask {
-				fmt.Printf("请输入 %s [隐藏输入]: ", input.Label)
-			} else if input.Placeholder != "" {
-				fmt.Printf("请输入 %s (%s): ", input.Label, input.Placeholder)
-			} else {
-				fmt.Printf("请输入 %s: ", input.Label)
+			val, err := notify.InputBoxStd(input.Label, input.Placeholder, input.Mask)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "读取输入 %q 失败: %v\n", input.Label, err)
+				os.Exit(1)
 			}
-			val := notify.InputBoxStd(input.Label, input.Placeholder, input.Mask)
 			if val == "" && input.Required {
 				fmt.Fprintf(os.Stderr, "\n输入 %q 是必填的，不能为空\n", input.Label)
 				os.Exit(1)
 			}
-			// 委托给 executor 解析占位符
-			values := map[string]string{input.Name: val}
-			exe.ResolveInputs(values)
+			values[input.Name] = val
 		}
+		exe.ResolveInputs(values)
 		fmt.Println()
 	}
 
@@ -239,6 +239,11 @@ func cmdServe(args []string) {
 	}
 	workflowPath := fs.Arg(0)
 	if err := serve.Run(workflowPath, os.Stdin, os.Stdout, *fromStep, *debug); err != nil {
+		// 用户主动停止属于正常结束（GUI 已收到 stopped 事件），不应报告为失败
+		if errors.Is(err, executor.ErrCancelled) {
+			fmt.Fprintln(os.Stderr, "serve: 执行已被用户停止")
+			return
+		}
 		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
 		os.Exit(1)
 	}

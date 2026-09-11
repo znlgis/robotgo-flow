@@ -168,7 +168,9 @@ robotgo-flow record [flags]
 | `--out` | `workflow.yml` | 输出的 YAML 文件路径 |
 | `--tpl-dir` | `./templates` | 模板截图保存目录 |
 
-按提示逐步录制：输入工作流元信息 → 添加步骤 → 选择动作类型（支持 19 种）→ 交互式截取模板图片 → 保存 YAML。
+按提示逐步录制：输入工作流元信息 → 添加步骤 → 选择动作类型（15 类，见"动作类型"）→ 交互式截取模板图片 → 保存 YAML。
+
+加 `--pipe` 可切换到 JSON-Line 管道模式（`--out` / `--tpl-dir` 同样适用），供 GUI 进程驱动录制。
 
 ### `capture` — 截取模板图片
 
@@ -211,11 +213,11 @@ inputs:                          # 可选，运行时变量定义
     mask: false                  #   是否隐藏输入（密码模式）
 settings:                        # 可选，全局设置
   element_timeout: 10            #   等待元素出现的超时秒数（默认 10）
-  on_error: abort                #   错误处理策略：abort / skip / retry（默认 abort）
-  max_retries: 3                 #   retry 模式下的最大重试次数（默认 3）
-  browser_refresh_delay: 3       #   刷新页面等待秒数（默认 3）
-  browser_navigation_delay: 2    #   前进/后退等待秒数（默认 2）
-  browser_page_load_delay: 3     #   打开 URL 等待秒数（默认 3）
+  on_error: abort                #   错误处理策略：abort / skip / retry（默认 abort，其他值会校验失败）
+  max_retries: 3                 #   retry 模式下的最大尝试次数（含首次执行，默认 3）
+  browser_refresh_delay: 3000    #   刷新页面等待毫秒数（默认 3000）
+  browser_navigation_delay: 2000 #   前进/后退等待毫秒数（默认 2000）
+  browser_page_load_delay: 3000  #   打开 URL 等待毫秒数（默认 3000）
   human:                         #   人类行为模拟设置
     enabled: false               #   是否启用
     speed: 1.0                   #   速度系数（0.1 ~ 5.0，默认 1.0）
@@ -255,7 +257,10 @@ inputs:
 |----|------|
 | `abort` | 立即终止执行（默认） |
 | `skip` | 记录错误日志，跳过当前动作，继续执行下一个 |
-| `retry` | 重试当前动作，最多 `max_retries` 次；耗尽后 abort |
+| `retry` | 重试当前动作，最多尝试 `max_retries` 次（含首次执行）；耗尽后 abort |
+
+> `on_error` 只接受 `abort` / `skip` / `retry` 三个值，
+> 其他值（含大小写不一致）会在加载工作流时直接报错，避免静默退化为 abort。
 
 ### 动作类型（19 种）
 
@@ -264,6 +269,7 @@ inputs:
 ```yaml
 # 单击 — 模板匹配或坐标
 - click: "templates/button.png"
+- click: {template: "templates/button.png"}   # 与 wait 一致的写法
 - click: {x: 500, y: 300}
 
 # 双击
@@ -332,7 +338,7 @@ inputs:
 - scroll: -300
 ```
 
-#### 交互式动作（需要 GUI 或控制台交互）
+#### 交互式动作（需要控制台交互）
 
 ```yaml
 # 运行时输入提示 — 让用户输入内容，支持密码模式
@@ -353,6 +359,11 @@ inputs:
     message: "处理已完成"
     duration: 3   # 秒，>0 时自动消失；=0 时需手动关闭
 ```
+
+> **运行模式限制**：`prompt` / `confirm` 通过 stdin 与用户交互，
+> 因此仅在 CLI（`run` / `record`）模式下可用。
+> `serve` 模式下 stdin 承载 JSON-Line 协议，这两个动作会立即返回明确错误，
+> 请改用 `inputs` 在启动前采集参数。
 
 ### 完整示例
 
@@ -377,7 +388,7 @@ inputs:
 
 三种方式：
 
-1. **WPF 录制标签页** — 一键启动交互式录制器
+1. **`record` 录制器** — 录制过程中遇到不存在的模板会自动提示框选截图
 2. **`capture` 命令** — 交互式框选屏幕区域
 3. **`CaptureInteractive` API** — 编程调用交互式截图（`capture.CaptureInteractive` / `capture.CaptureInteractivePipe`），支持 stdin 和管道两种模式
 
@@ -466,7 +477,12 @@ robotgo-flow/
 │   │   │   ├── notify/
 │   │   │   │   └── notify.go            # 标准输入/输出通知（输入框、确认框、错误日志）
 │   │   │   ├── recorder/
-│   │   │   │   └── recorder.go          # 交互式录制器：CLI 引导录制 18 种动作类型
+│   │   │   ├── recorder.go              # 交互式录制器：CLI 引导录制
+│   │   │   │   └── pipe.go              # 管道模式录制器（JSON-Line，供 GUI 驱动）
+│   │   │   ├── protocol/
+│   │   │   │   └── protocol.go          # serve / DLL 共用的 JSON-Line 协议消息类型
+│   │   │   ├── logger/
+│   │   │   │   └── logger.go            # 分级日志（serve 模式下自动改道 stderr）
 │   │   │   ├── capture/
 │   │   │   │   └── capture.go           # 截图工具：交互式框选截图（CaptureRegion / CaptureInteractive / CaptureInteractivePipe）
 │   │   │   ├── geom/

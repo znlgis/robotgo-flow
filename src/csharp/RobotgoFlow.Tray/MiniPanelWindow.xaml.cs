@@ -10,11 +10,13 @@ public partial class MiniPanelWindow : Window
         InitializeComponent();
         DataContext = vm;
 
+        // 开始执行后收起面板，让出屏幕给被自动化的窗口
         vm.OnStartRequested += (path, _, _, _) =>
         {
             if (!string.IsNullOrEmpty(path))
                 Hide();
         };
+        vm.OnCloseRequested += Hide;
     }
 
     public void ShowNearTray()

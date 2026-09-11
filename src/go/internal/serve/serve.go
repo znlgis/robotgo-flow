@@ -5,53 +5,56 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sync"
 
 	"robotgo-flow/internal/action"
 	"robotgo-flow/internal/config"
 	"robotgo-flow/internal/executor"
+	"robotgo-flow/internal/logger"
+	"robotgo-flow/internal/notify"
+	"robotgo-flow/internal/protocol"
 )
 
-// Event 表示写入 stdout 的单条 JSON 事件。
-type Event struct {
-	Type            string      `json:"type"`
-	OK              *bool       `json:"ok,omitempty"`
-	Name            string      `json:"name,omitempty"`
-	TotalSteps      int         `json:"total_steps,omitempty"`
-	Inputs          []InputInfo `json:"inputs,omitempty"`
-	Idx             int         `json:"idx,omitempty"`
-	StepIdx         int         `json:"step_idx,omitempty"`
-	Total           int         `json:"total,omitempty"`
-	Action          string      `json:"action,omitempty"`
-	Detail          string      `json:"detail,omitempty"`
-	Level           string      `json:"level,omitempty"`
-	Message         string      `json:"message,omitempty"`
-	Error           string      `json:"error,omitempty"`
-	EstimatedSec    float64     `json:"estimated_sec,omitempty"`
-	ScreenshotPath  string      `json:"screenshot_path,omitempty"`
-	TotalElapsedSec float64     `json:"total_elapsed_sec,omitempty"`
-}
+// 协议消息类型复用 internal/protocol，避免与 DLL 模式（ffi 包）的副本产生漂移。
+type (
+	// Event 表示写入 stdout 的单条 JSON 事件。
+	Event = protocol.Event
+	// InputInfo 对应 config.InputSpec, 用于 loaded 事件。
+	InputInfo = protocol.InputInfo
+	// Command 表示从 stdin 接收的 JSON 命令。
+	Command = protocol.Command
+)
 
-// InputInfo 对应 config.InputSpec, 用于 loaded 事件。
-type InputInfo struct {
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Placeholder string `json:"placeholder,omitempty"`
-	Required    bool   `json:"required"`
-	Mask        bool   `json:"mask"`
-}
-
-// Command 表示从 stdin 接收的 JSON 命令。
-type Command struct {
-	Type   string            `json:"type"`
-	Values map[string]string `json:"values,omitempty"`
-}
+// 非交互原因：serve 模式下 stdin 承载 JSON 协议、stdout 承载事件流，
+// 交互动作若继续读取 stdin 会破坏协议（甚至永久阻塞）。
+const nonInteractiveReason = "serve 模式下 stdin 用于 JSON 协议，请在 CLI 模式或通过 inputs 采集参数"
 
 // serveCallback 实现 executor.ProgressCallback, 将 JSON 事件写入 stdout。
+// closed 置位后所有事件写入变为空操作：Run 返回后 stdout 可能已被调用方关闭
+// （例如子进程退出、测试用 buffer 结束），继续写入会造成竞态。
 type serveCallback struct {
-	mu  sync.Mutex
-	enc *json.Encoder
+	mu     sync.Mutex
+	enc    *json.Encoder
+	closed bool
+}
+
+// write 在未关闭时写出事件。
+func (s *serveCallback) write(ev Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	_ = s.enc.Encode(ev)
+}
+
+// finish 关闭事件通道，之后的所有事件都被丢弃。
+func (s *serveCallback) finish() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
 }
 
 type serveEngine interface {
@@ -100,52 +103,39 @@ var (
 )
 
 func (s *serveCallback) OnWorkflowStart(name string, totalSteps int) {
-	s.mu.Lock()
-	s.enc.Encode(Event{Type: "workflow_start", Name: name, TotalSteps: totalSteps})
-	s.mu.Unlock()
+	s.write(Event{Type: "workflow_start", Name: name, TotalSteps: totalSteps})
 }
 
 func (s *serveCallback) OnStepStart(stepIdx, totalSteps int, stepName string, estimatedSec float64) {
-	s.mu.Lock()
-	s.enc.Encode(Event{Type: "step_start", Idx: stepIdx, Total: totalSteps, Name: stepName, EstimatedSec: estimatedSec})
-	s.mu.Unlock()
+	s.write(Event{Type: "step_start", Idx: stepIdx, Total: totalSteps, Name: stepName, EstimatedSec: estimatedSec})
 }
 
 func (s *serveCallback) OnActionStart(stepIdx, actionIdx int, actionType, desc string) {
-	s.mu.Lock()
-	s.enc.Encode(Event{Type: "action_start", StepIdx: stepIdx, Idx: actionIdx, Action: actionType, Detail: desc})
-	s.mu.Unlock()
+	s.write(Event{Type: "action_start", StepIdx: stepIdx, Idx: actionIdx, Action: actionType, Detail: desc})
 }
 
 func (s *serveCallback) OnActionDone(stepIdx, actionIdx int) {
-	s.mu.Lock()
-	s.enc.Encode(Event{Type: "action_done", StepIdx: stepIdx, Idx: actionIdx})
-	s.mu.Unlock()
+	s.write(Event{Type: "action_done", StepIdx: stepIdx, Idx: actionIdx})
 }
 
 func (s *serveCallback) OnStepDone(stepIdx int, err error, screenshotPath string) {
-	s.mu.Lock()
 	ev := Event{Type: "step_done", Idx: stepIdx, ScreenshotPath: screenshotPath}
 	if err != nil {
 		ev.Error = err.Error()
 	}
-	s.enc.Encode(ev)
-	s.mu.Unlock()
+	s.write(ev)
 }
 
 func (s *serveCallback) OnWorkflowDone(name string, totalSteps int, err error, totalElapsedSec float64) {
-	s.mu.Lock()
 	ok := err == nil
 	ev := Event{Type: "workflow_done", OK: &ok, Name: name, TotalSteps: totalSteps, TotalElapsedSec: totalElapsedSec}
 	if err != nil {
 		ev.Error = err.Error()
 	}
-	s.enc.Encode(ev)
-	s.mu.Unlock()
+	s.write(ev)
 }
 
 func (s *serveCallback) OnLog(level executor.LogLevel, message string, stepIdx int) {
-	s.mu.Lock()
 	lvlStr := "info"
 	switch level {
 	case executor.LogWarn:
@@ -153,30 +143,17 @@ func (s *serveCallback) OnLog(level executor.LogLevel, message string, stepIdx i
 	case executor.LogError:
 		lvlStr = "error"
 	}
-	s.enc.Encode(Event{Type: "log", Level: lvlStr, Message: message, StepIdx: stepIdx})
-	s.mu.Unlock()
+	s.write(Event{Type: "log", Level: lvlStr, Message: message, StepIdx: stepIdx})
 }
 
 // emitStopped 发送 "stopped" 事件, 可从 stdin 读取协程安全并发调用。
 func (s *serveCallback) emitStopped() {
-	s.mu.Lock()
-	s.enc.Encode(Event{Type: "stopped"})
-	s.mu.Unlock()
+	s.write(Event{Type: "stopped"})
 }
 
-// inputInfos 将 config.InputSpec 切片转换为 serve InputInfo 切片。
+// inputInfos 将 config.InputSpec 切片转换为协议 InputInfo 切片。
 func inputInfos(inputs []config.InputSpec) []InputInfo {
-	out := make([]InputInfo, len(inputs))
-	for i, inp := range inputs {
-		out[i] = InputInfo{
-			Name:        inp.Name,
-			Label:       inp.Label,
-			Placeholder: inp.Placeholder,
-			Required:    inp.Required,
-			Mask:        inp.Mask,
-		}
-	}
-	return out
+	return protocol.InputInfos(inputs)
 }
 
 // Run 在 stdin/stdout 上启动指定工作流的 serve 协议。
@@ -195,6 +172,15 @@ func inputInfos(inputs []config.InputSpec) []InputInfo {
 //	调用方 → stdin: {"type":"stop"}  (随时可用)
 //	Go → stdout: {"type":"stopped"}
 func Run(workflowPath string, stdin io.Reader, stdout io.Writer, fromStep int, debug bool) error {
+	// stdout 承载 JSON-Line 协议流：日志必须改道 stderr，否则 [INFO] 行会混入协议。
+	// 同时禁用交互动作，避免它们与协议解码器争抢 stdin。
+	restoreLogs := logger.SetOutput(os.Stderr)
+	notify.DisableInteraction(nonInteractiveReason)
+	defer func() {
+		restoreLogs()
+		notify.SetInteractor(nil)
+	}()
+
 	// 使用 io.Pipe 包装 stdin，确保 Run 返回时通过关闭 pr 终止 stdin 读取协程，防止协程泄漏
 	pr, pw := io.Pipe()
 	go func() {
@@ -206,6 +192,8 @@ func Run(workflowPath string, stdin io.Reader, stdout io.Writer, fromStep int, d
 	dec := json.NewDecoder(pr)
 	defer pr.Close() // Run 返回时强制结束 stdin 读取协程
 	cb := &serveCallback{enc: enc}
+	// Run 返回后不再向 stdout 写入事件（stdout 可能已被调用方关闭）
+	defer cb.finish()
 
 	// 1. 加载工作流配置
 	cfg, err := loadWorkflow(workflowPath)

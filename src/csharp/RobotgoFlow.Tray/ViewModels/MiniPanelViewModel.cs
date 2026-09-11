@@ -30,7 +30,11 @@ public partial class MiniPanelViewModel : ObservableObject
     [ObservableProperty] private ObservableCollection<string> _recentFiles = new();
     [ObservableProperty] private ObservableCollection<InputField> _inputFields = new();
 
+    /// <summary>请求开始执行：参数为（工作流路径, 名称, 起始步骤, 输入变量 JSON）。</summary>
     public event Action<string, string, int, string?>? OnStartRequested;
+
+    /// <summary>请求关闭面板（取消按钮）。</summary>
+    public event Action? OnCloseRequested;
 
     private string? _loadedName;
 
@@ -215,7 +219,7 @@ public partial class MiniPanelViewModel : ObservableObject
     [RelayCommand]
     private void Cancel()
     {
-        OnStartRequested?.Invoke("", "", 0, null);
+        OnCloseRequested?.Invoke();
     }
 }
 

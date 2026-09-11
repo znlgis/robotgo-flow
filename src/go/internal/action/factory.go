@@ -98,21 +98,34 @@ func parseRightClick(v any) (*RightClickAction, error) {
 	)
 }
 
-// parseTargetedAction 是解析 targetedAction 类型操作的通用函数
+// parseTargetedAction 是解析 targetedAction 类型操作的通用函数。
+// 支持三种写法：字符串（模板文件）、{template: ...}（模板文件）、{x, y}（屏幕坐标）。
 func parseTargetedAction[T any](v any, makeFromTemplate func(string) T, makeFromCoord func(geom.Point) T, label string) (T, error) {
 	switch val := v.(type) {
 	case string:
+		if val == "" {
+			var zero T
+			return zero, fmt.Errorf("%s: 模板路径不能为空", label)
+		}
 		return makeFromTemplate(val), nil
 	case map[string]interface{}:
+		// {template: "templates/x.png"} 与 wait 动作写法保持一致
+		if tpl, ok := val["template"].(string); ok {
+			if tpl == "" {
+				var zero T
+				return zero, fmt.Errorf("%s: 模板路径不能为空", label)
+			}
+			return makeFromTemplate(tpl), nil
+		}
 		x, y, err := parseCoord(val)
 		if err != nil {
 			var zero T
-			return zero, fmt.Errorf("%s 坐标解析失败: %w", label, err)
+			return zero, fmt.Errorf("%s 坐标解析失败 (也可用 {template: 路径}): %w", label, err)
 		}
 		return makeFromCoord(geom.Point{X: x, Y: y}), nil
 	default:
 		var zero T
-		return zero, fmt.Errorf("%s: 需要字符串或 {x,y} 格式, 实际为 %T", label, v)
+		return zero, fmt.Errorf("%s: 需要字符串、{template} 或 {x,y} 格式, 实际为 %T", label, v)
 	}
 }
 

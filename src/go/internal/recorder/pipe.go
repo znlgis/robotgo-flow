@@ -256,15 +256,15 @@ func (r *PipeRecorder) pipeTargetedAction(actionType string) (*config.Action, er
 	}
 }
 
-func (r *PipeRecorder) pipeClick(cmd RecorderCommand) (*config.Action, error) {
+func (r *PipeRecorder) pipeClick(_ RecorderCommand) (*config.Action, error) {
 	return r.pipeTargetedAction("click")
 }
 
-func (r *PipeRecorder) pipeDoubleClick(cmd RecorderCommand) (*config.Action, error) {
+func (r *PipeRecorder) pipeDoubleClick(_ RecorderCommand) (*config.Action, error) {
 	return r.pipeTargetedAction("double_click")
 }
 
-func (r *PipeRecorder) pipeRightClick(cmd RecorderCommand) (*config.Action, error) {
+func (r *PipeRecorder) pipeRightClick(_ RecorderCommand) (*config.Action, error) {
 	return r.pipeTargetedAction("right_click")
 }
 

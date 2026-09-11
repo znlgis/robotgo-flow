@@ -14,11 +14,15 @@ type PromptAction struct {
 	mask    bool
 }
 
-// Execute 弹出 GUI 输入框，可选点击目标元素，然后输入文本。
+// Execute 请求用户输入，可选点击目标元素，然后输入文本。
+// 取值通过 notify.Interactor 完成：CLI 下读取 stdin，serve/DLL 等宿主可替换实现。
 func (a *PromptAction) Execute(eng Engine) error {
-	val := notify.InputBoxStd(a.title, a.message, a.mask)
+	val, err := notify.InputBoxStd(a.title, a.message, a.mask)
+	if err != nil {
+		return fmt.Errorf("弹窗输入: %w", err)
+	}
 	if val == "" {
-		return fmt.Errorf("弹窗输入: 用户取消或输入为空")
+		return fmt.Errorf("弹窗输入: 用户取消或输入为空 (%s)", a.title)
 	}
 
 	// 如果指定了目标模板，先定位并点击
@@ -41,9 +45,13 @@ type ConfirmAction struct {
 	message string
 }
 
-// Execute 打印确认提示并读取 y/n 确认。
+// Execute 请求用户确认；用户选择否或无法交互时返回错误（由 on_error 策略决定后续处理）。
 func (a *ConfirmAction) Execute(eng Engine) error {
-	if !notify.ConfirmBoxStd(a.title, a.message) {
+	ok, err := notify.ConfirmBoxStd(a.title, a.message)
+	if err != nil {
+		return fmt.Errorf("确认: %w (%s)", err, a.title)
+	}
+	if !ok {
 		return fmt.Errorf("确认: 用户选择否或取消 (%s)", a.title)
 	}
 	return nil
@@ -56,7 +64,7 @@ type NotifyAction struct {
 	duration float64 // 秒，0 = 手动关闭
 }
 
-// Execute 打印通知到 stderr。
+// Execute 输出通知信息到 stderr（不阻塞执行流程）。
 func (a *NotifyAction) Execute(eng Engine) error {
 	notify.PrintError(a.title, a.message)
 	return nil

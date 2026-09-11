@@ -14,6 +14,7 @@ public class GoProcessService : IEngineService
     public const string DefaultGoBinaryPath = "robotgo-flow.exe";
     private const int StopTimeoutMs = 3000;
 
+    private readonly object _stdinLock = new();
     private Process? _process;
     private StreamWriter? _stdin;
 
@@ -87,10 +88,26 @@ public class GoProcessService : IEngineService
 
     public void SendCommand(ServeCommand cmd)
     {
-        if (_stdin is null || _process is not { HasExited: false }) return;
+        if (_process is not { HasExited: false }) return;
         var json = JsonSerializer.Serialize(cmd);
-        _stdin.WriteLine(json);
-        _stdin.Flush();
+        // 加锁：停止与输入命令可能来自不同线程，StreamWriter 不是线程安全的
+        lock (_stdinLock)
+        {
+            var stdin = _stdin;
+            if (stdin is null) return;
+            try
+            {
+                stdin.WriteLine(json);
+                stdin.Flush();
+            }
+            catch (IOException)
+            {
+                // 子进程已退出或管道已关闭，忽略
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     /// <summary>
@@ -118,16 +135,22 @@ public class GoProcessService : IEngineService
             if (!proc.HasExited)
             {
                 // 发送停止命令到子进程（用局部变量避免 _process 已被置空）
-                try { proc.StandardInput.WriteLine("{\"type\":\"stop\"}"); }
-                catch { /* stdin 可能已关闭 */ }
+                lock (_stdinLock)
+                {
+                    try { proc.StandardInput.WriteLine("{\"type\":\"stop\"}"); }
+                    catch { /* stdin 可能已关闭 */ }
+                }
                 if (!proc.WaitForExit(StopTimeoutMs)) proc.Kill();
             }
         }
         catch { /* 进程已退出 */ }
         finally
         {
-            try { _stdin?.Dispose(); } catch { }
-            _stdin = null;
+            lock (_stdinLock)
+            {
+                try { _stdin?.Dispose(); } catch { }
+                _stdin = null;
+            }
             try { proc.Dispose(); } catch { }
         }
     }

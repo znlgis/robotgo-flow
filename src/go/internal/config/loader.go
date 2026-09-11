@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -90,6 +91,19 @@ func (w *Workflow) Validate(workflowDir string) error {
 	if w.Settings.ElementTimeout <= 0 {
 		return fmt.Errorf("元素超时时间必须为正数")
 	}
+	// on_error 仅支持三种策略；拼写错误（如 "Retry"）必须显式报错，
+	// 否则会被静默当作 abort 处理，导致用户配置失效且难以排查。
+	switch w.Settings.OnError {
+	case "abort", "skip", "retry":
+	default:
+		return fmt.Errorf("on_error 只能为 abort / skip / retry，当前值为 %q", w.Settings.OnError)
+	}
+	if w.Settings.MaxRetries < 1 {
+		return fmt.Errorf("max_retries 必须为正整数，当前值为 %d", w.Settings.MaxRetries)
+	}
+	if err := w.validateInputs(); err != nil {
+		return err
+	}
 	if w.Settings.Human.Enabled {
 		s := w.Settings.Human.Speed
 		if s < 0.1 || s > 5.0 {
@@ -106,6 +120,28 @@ func (w *Workflow) Validate(workflowDir string) error {
 // isEmpty 检查 Action 是否所有字段都为零值
 func (a *Action) isEmpty() bool {
 	return a.ActionType() == ""
+}
+
+// validateInputs 校验运行时变量声明：名称必填、不可重复。
+// 名称会被拼接为 $input.<name> 占位符，因此还需排除空白字符。
+func (w *Workflow) validateInputs() error {
+	seen := make(map[string]int, len(w.Inputs))
+	for i, input := range w.Inputs {
+		if input.Name == "" {
+			return fmt.Errorf("inputs 第 %d 项: name 不能为空", i+1)
+		}
+		if strings.TrimSpace(input.Name) != input.Name {
+			return fmt.Errorf("inputs 第 %d 项: name %q 不能包含首尾空白", i+1, input.Name)
+		}
+		if prev, ok := seen[input.Name]; ok {
+			return fmt.Errorf("inputs 第 %d 项: name %q 与第 %d 项重复", i+1, input.Name, prev+1)
+		}
+		seen[input.Name] = i
+		if input.Label == "" {
+			return fmt.Errorf("inputs 第 %d 项 (%s): label 不能为空", i+1, input.Name)
+		}
+	}
+	return nil
 }
 
 // validateMapFields 校验 map 类型 Action 字段完整性
@@ -217,31 +253,37 @@ func (a *Action) validateTemplates(baseDir string) error {
 // templatePaths 返回 Action 中引用的所有模板文件路径
 func (a *Action) templatePaths() []string {
 	var paths []string
-	if s, ok := a.Click.(string); ok {
-		paths = append(paths, s)
-	}
-	if s, ok := a.DoubleClick.(string); ok {
-		paths = append(paths, s)
-	}
-	if s, ok := a.RightClick.(string); ok {
-		paths = append(paths, s)
-	}
+	paths = appendTargetPath(paths, a.Click)
+	paths = appendTargetPath(paths, a.DoubleClick)
+	paths = appendTargetPath(paths, a.RightClick)
 	if a.Drag != nil {
 		paths = append(paths, a.Drag.From, a.Drag.To)
 	}
 	if a.Type != nil {
 		paths = append(paths, a.Type.Into)
 	}
-	if s, ok := a.Wait.(string); ok {
-		paths = append(paths, s)
-	}
-	if m, ok := a.Wait.(map[string]interface{}); ok {
-		if t, ok := m["template"].(string); ok {
-			paths = append(paths, t)
-		}
-	}
+	paths = appendTargetPath(paths, a.Wait)
 	if a.WaitGone != "" {
 		paths = append(paths, a.WaitGone)
+	}
+	if a.Prompt != nil && a.Prompt.Into != "" {
+		paths = append(paths, a.Prompt.Into)
+	}
+	return paths
+}
+
+// appendTargetPath 提取目标定位字段中的模板路径。
+// 支持两种写法：字符串（模板）与 map（{template: ...} 或 {x, y} 坐标，后者无模板路径）。
+func appendTargetPath(paths []string, target any) []string {
+	switch v := target.(type) {
+	case string:
+		if v != "" {
+			paths = append(paths, v)
+		}
+	case map[string]interface{}:
+		if s, ok := v["template"].(string); ok && s != "" {
+			paths = append(paths, s)
+		}
 	}
 	return paths
 }

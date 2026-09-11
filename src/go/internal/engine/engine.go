@@ -12,6 +12,7 @@ import (
 
 	"robotgo-flow/internal/action"
 	"robotgo-flow/internal/encoding"
+	"robotgo-flow/internal/geom"
 	"robotgo-flow/internal/logger"
 )
 
@@ -38,6 +39,7 @@ type Engine struct {
 	browserPageLoadDelay   int
 	// 模板图片缓存，避免重复打开
 	templateCache   map[string]robotgo.CBitmap
+	templateSizes   map[string]geom.Point // 模板尺寸缓存（W/H），避免重复读取文件
 	templateCacheMu sync.RWMutex
 }
 
@@ -54,6 +56,7 @@ func NewEngine(templateDir, screenshotDir string) *Engine {
 		browserPageLoadDelay:   3000,
 		// 模板位图缓存
 		templateCache: make(map[string]robotgo.CBitmap),
+		templateSizes: make(map[string]geom.Point),
 	}
 }
 
@@ -417,6 +420,7 @@ func (e *Engine) Close() {
 		robotgo.FreeBitmap(bitmap)
 		delete(e.templateCache, path)
 	}
+	clear(e.templateSizes)
 }
 
 // openCachedTemplate 打开模板位图，优先从缓存中获取。
@@ -424,18 +428,47 @@ func (e *Engine) Close() {
 // 调用方使用返回的位图时不应释放它，缓存由 Engine.Close 统一管理。
 func (e *Engine) openCachedTemplate(path string) robotgo.CBitmap {
 	e.templateCacheMu.RLock()
-	if bitmap, ok := e.templateCache[path]; ok {
-		e.templateCacheMu.RUnlock()
-		return bitmap
-	}
+	cached, ok := e.templateCache[path]
 	e.templateCacheMu.RUnlock()
+	if ok {
+		return cached
+	}
 
 	sysPath := encoding.ToGBK(path)
 	bitmap := bitmaputil.Open(sysPath)
-	if bitmap != nil {
-		e.templateCacheMu.Lock()
-		e.templateCache[path] = bitmap
-		e.templateCacheMu.Unlock()
+	if bitmap == nil {
+		return nil
 	}
+
+	// 双重检查：并发调用时可能已有其它 goroutine 写入缓存，
+	// 此时释放本次新打开的位图，避免内存泄漏与缓存被覆盖后无人释放。
+	e.templateCacheMu.Lock()
+	if existing, ok := e.templateCache[path]; ok {
+		e.templateCacheMu.Unlock()
+		robotgo.FreeBitmap(bitmap)
+		return existing
+	}
+	e.templateCache[path] = bitmap
+	e.templateCacheMu.Unlock()
 	return bitmap
+}
+
+// templateSize 返回模板图片的宽高，结果缓存在内存中避免每次匹配都读取文件。
+func (e *Engine) templateSize(path string) (int, int, error) {
+	e.templateCacheMu.RLock()
+	size, ok := e.templateSizes[path]
+	e.templateCacheMu.RUnlock()
+	if ok {
+		return size.X, size.Y, nil
+	}
+
+	w, h, err := robotgo.ImgSize(encoding.ToGBK(path))
+	if err != nil {
+		return 0, 0, fmt.Errorf("查找元素: 获取图片尺寸失败: %w", err)
+	}
+
+	e.templateCacheMu.Lock()
+	e.templateSizes[path] = geom.Point{X: w, Y: h}
+	e.templateCacheMu.Unlock()
+	return w, h, nil
 }

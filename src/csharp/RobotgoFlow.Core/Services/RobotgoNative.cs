@@ -34,6 +34,7 @@ public class RobotgoNative : IEngineService
 
     private Task? _executeTask;
     private int _isDisposed;
+    private int _isRunningFlag; // 0 = 空闲, 1 = 正在执行（Interlocked 保护）
     private volatile bool _isRunning;
 
     static RobotgoNative()
@@ -103,6 +104,9 @@ public class RobotgoNative : IEngineService
     {
         RobotgoStop();
         _isRunning = false;
+        // 解除执行占位，允许用户停止后立即重新发起执行
+        // （Go 侧任务若尚未返回，新的执行请求会在 dispatch 队列中排队等待）。
+        Interlocked.Exchange(ref _isRunningFlag, 0);
     }
 
     // ── 清理 ──────────────────────────────────────────────────
@@ -114,6 +118,9 @@ public class RobotgoNative : IEngineService
         // 等待执行任务完成，避免 use-after-free
         try { _executeTask?.Wait(TimeSpan.FromSeconds(5)); }
         catch { /* 超时或异常，继续销毁 */ }
+        // 先摘除回调再销毁：否则 Go 侧仍可能在销毁过程中回调已卸载的托管代码
+        try { RobotgoSetCallback(null); }
+        catch { /* DLL 已不可用 */ }
         RobotgoDestroy();
         IsAvailable = false;
     }
@@ -125,7 +132,7 @@ public class RobotgoNative : IEngineService
     private static extern void RobotgoDestroy();
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void RobotgoSetCallback(RawCallbackDelegate cb);
+    private static extern void RobotgoSetCallback(RawCallbackDelegate? cb);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern void RobotgoFreeString(IntPtr str);
@@ -162,7 +169,8 @@ public class RobotgoNative : IEngineService
     public void ExecuteWithInputs(string workflowPath, int fromStep, bool debug, string? inputsJson)
     {
         ThrowIfDisposed();
-        if (_isRunning) return;
+        // 原子占位：并发调用（例如托盘菜单连点）时只允许一次执行
+        if (Interlocked.CompareExchange(ref _isRunningFlag, 1, 0) != 0) return;
         _isRunning = true;
 
         _executeTask = Task.Run(() =>
@@ -191,6 +199,7 @@ public class RobotgoNative : IEngineService
             finally
             {
                 _isRunning = false;
+                Interlocked.Exchange(ref _isRunningFlag, 0);
                 var d = DispatchCallback;
                 if (d != null)
                     d(() => OnExited?.Invoke(0));

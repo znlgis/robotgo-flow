@@ -4,6 +4,7 @@ package logger
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync/atomic"
@@ -31,7 +32,7 @@ type Logger struct {
 // DefaultLogger 全局默认日志记录器
 var DefaultLogger = New(LevelInfo)
 
-// New 创建新的 Logger
+// New 创建新的 Logger（Info/Warn/Debug 输出到 stdout，Error 输出到 stderr）
 func New(level Level) *Logger {
 	l := &Logger{
 		debug:  log.New(os.Stdout, "[DEBUG] ", log.LstdFlags|log.Lshortfile),
@@ -48,6 +49,16 @@ func (l *Logger) SetLevel(level Level) { l.level.Store(int32(level)) }
 
 // Level 返回当前日志级别（并发安全）
 func (l *Logger) Level() Level { return Level(l.level.Load()) }
+
+// SetOutput 将 Debug/Info/Warn 重定向到 w（Error 始终写 stderr）。
+// log.Logger.SetOutput 自身并发安全，可随时调用。
+// 典型用途：serve 模式下 stdout 承载 JSON-Line 协议，日志必须改道 stderr，
+// 否则日志行会混入协议流。
+func (l *Logger) SetOutput(w io.Writer) {
+	l.debug.SetOutput(w)
+	l.info.SetOutput(w)
+	l.warn.SetOutput(w)
+}
 
 // Debug 调试信息，仅在 level <= LevelDebug 时输出
 func (l *Logger) Debug(format string, args ...interface{}) {
@@ -84,3 +95,10 @@ func Debug(format string, args ...interface{}) { DefaultLogger.Debug(format, arg
 func Info(format string, args ...interface{})  { DefaultLogger.Info(format, args...) }
 func Warn(format string, args ...interface{})  { DefaultLogger.Warn(format, args...) }
 func Error(format string, args ...interface{}) { DefaultLogger.Error(format, args...) }
+
+// SetOutput 将默认日志器的 Debug/Info/Warn 重定向到 w，返回恢复函数。
+// 用法: defer logger.SetOutput(os.Stderr)()
+func SetOutput(w io.Writer) func() {
+	DefaultLogger.SetOutput(w)
+	return func() { DefaultLogger.SetOutput(os.Stdout) }
+}

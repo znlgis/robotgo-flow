@@ -22,27 +22,41 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"robotgo-flow/internal/capture"
 	"robotgo-flow/internal/config"
 	"robotgo-flow/internal/engine"
 	"robotgo-flow/internal/executor"
+	"robotgo-flow/internal/protocol"
 	"robotgo-flow/internal/recorder"
 )
 
 func main() {}
 
+// Version 通过构建时 -ldflags "-X main.Version=1.2.3" 注入。
+var Version = "dev"
+
+// recordCmdBuffer 录制命令通道的缓冲容量。
+// GUI 可能在录制器尚未读取命令时下发指令（例如截图过程中或最小化窗口后），
+// 使用无缓冲通道会导致命令被丢弃；缓冲后按顺序排队。
+const recordCmdBuffer = 16
+
+// recordSendTimeout 向录制器投递命令的最长等待时间。
+const recordSendTimeout = 3 * time.Second
+
 // ---------- 生命周期 ----------
 
 //export RobotgoInit
 func RobotgoInit() *C.char {
-	return C.CString(`{"version":"dev"}`)
+	return C.CString(fmt.Sprintf("{\"version\":%q}", Version))
 }
 
 //export RobotgoDestroy
 func RobotgoDestroy() {
-	// 预留清理逻辑
+	// 清理回调，避免 C# 侧卸载后 Go 仍向其投递事件。
+	atomic.StorePointer(&gCallback, nil)
 }
 
 var gCallback unsafe.Pointer // 原子访问的事件回调指针
@@ -73,22 +87,11 @@ func RobotgoPreload(workflowPath *C.char) (ret *C.char) {
 		return C.CString(goErrorJSON("加载工作流失败: " + err.Error()))
 	}
 
-	inputs := make([]InputInfo, len(cfg.Inputs))
-	for i, inp := range cfg.Inputs {
-		inputs[i] = InputInfo{
-			Name:        inp.Name,
-			Label:       inp.Label,
-			Placeholder: inp.Placeholder,
-			Required:    inp.Required,
-			Mask:        inp.Mask,
-		}
-	}
-
 	result := map[string]interface{}{
 		"ok":          true,
 		"name":        cfg.Name,
 		"total_steps": len(cfg.Steps),
-		"inputs":      inputs,
+		"inputs":      protocol.InputInfos(cfg.Inputs),
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -153,23 +156,13 @@ func RobotgoExecute(workflowPath *C.char, fromStep C.int, debug C.int, inputsJSO
 			executor.ResolveInputs(cfg, values)
 		}
 
-		// 发送 loaded 事件（模拟当前 serve 协议）
-		inputs := make([]InputInfo, len(cfg.Inputs))
-		for i, inp := range cfg.Inputs {
-			inputs[i] = InputInfo{
-				Name:        inp.Name,
-				Label:       inp.Label,
-				Placeholder: inp.Placeholder,
-				Required:    inp.Required,
-				Mask:        inp.Mask,
-			}
-		}
-		emitEvent(Event{
+		// 发送 loaded 事件（与 serve 协议保持一致）
+		emitEvent(protocol.Event{
 			Type:       "loaded",
-			OK:         boolPtr(true),
+			OK:         protocol.BoolPtr(true),
 			Name:       cfg.Name,
 			TotalSteps: len(cfg.Steps),
-			Inputs:     inputs,
+			Inputs:     protocol.InputInfos(cfg.Inputs),
 		})
 
 		// 创建可取消 context（加锁保护）
@@ -228,53 +221,23 @@ func RobotgoStop() {
 
 // ---------- executor.ProgressCallback 实现 ----------
 
-// Event 和 InputInfo 复用 serve 包的结构（JSON 标签一致）。
-type Event struct {
-	Type            string      `json:"type"`
-	OK              *bool       `json:"ok,omitempty"`
-	Name            string      `json:"name,omitempty"`
-	TotalSteps      int         `json:"total_steps,omitempty"`
-	Inputs          []InputInfo `json:"inputs,omitempty"`
-	Idx             int         `json:"idx,omitempty"`
-	StepIdx         int         `json:"step_idx,omitempty"`
-	Total           int         `json:"total,omitempty"`
-	Action          string      `json:"action,omitempty"`
-	Detail          string      `json:"detail,omitempty"`
-	Level           string      `json:"level,omitempty"`
-	Message         string      `json:"message,omitempty"`
-	Error           string      `json:"error,omitempty"`
-	EstimatedSec    float64     `json:"estimated_sec,omitempty"`
-	ScreenshotPath  string      `json:"screenshot_path,omitempty"`
-	TotalElapsedSec float64     `json:"total_elapsed_sec,omitempty"`
-}
-
-type InputInfo struct {
-	Name        string `json:"name"`
-	Label       string `json:"label"`
-	Placeholder string `json:"placeholder,omitempty"`
-	Required    bool   `json:"required"`
-	Mask        bool   `json:"mask"`
-}
-
-func boolPtr(b bool) *bool { return &b }
-
 // ffiCallback 实现 executor.ProgressCallback，将事件推送到 C#。
 type ffiCallback struct{}
 
 func (c *ffiCallback) OnWorkflowStart(name string, totalSteps int) {
-	emitEvent(Event{Type: "workflow_start", Name: name, TotalSteps: totalSteps})
+	emitEvent(protocol.Event{Type: "workflow_start", Name: name, TotalSteps: totalSteps})
 }
 func (c *ffiCallback) OnStepStart(stepIdx, totalSteps int, stepName string, estimatedSec float64) {
-	emitEvent(Event{Type: "step_start", Idx: stepIdx, Total: totalSteps, Name: stepName, EstimatedSec: estimatedSec})
+	emitEvent(protocol.Event{Type: "step_start", Idx: stepIdx, Total: totalSteps, Name: stepName, EstimatedSec: estimatedSec})
 }
 func (c *ffiCallback) OnActionStart(stepIdx, actionIdx int, actionType, desc string) {
-	emitEvent(Event{Type: "action_start", StepIdx: stepIdx, Idx: actionIdx, Action: actionType, Detail: desc})
+	emitEvent(protocol.Event{Type: "action_start", StepIdx: stepIdx, Idx: actionIdx, Action: actionType, Detail: desc})
 }
 func (c *ffiCallback) OnActionDone(stepIdx, actionIdx int) {
-	emitEvent(Event{Type: "action_done", StepIdx: stepIdx, Idx: actionIdx})
+	emitEvent(protocol.Event{Type: "action_done", StepIdx: stepIdx, Idx: actionIdx})
 }
 func (c *ffiCallback) OnStepDone(stepIdx int, err error, screenshotPath string) {
-	ev := Event{Type: "step_done", Idx: stepIdx, ScreenshotPath: screenshotPath}
+	ev := protocol.Event{Type: "step_done", Idx: stepIdx, ScreenshotPath: screenshotPath}
 	if err != nil {
 		ev.Error = err.Error()
 	}
@@ -282,7 +245,7 @@ func (c *ffiCallback) OnStepDone(stepIdx int, err error, screenshotPath string) 
 }
 func (c *ffiCallback) OnWorkflowDone(name string, totalSteps int, err error, totalElapsedSec float64) {
 	ok := err == nil
-	ev := Event{Type: "workflow_done", OK: &ok, Name: name, TotalSteps: totalSteps, TotalElapsedSec: totalElapsedSec}
+	ev := protocol.Event{Type: "workflow_done", OK: &ok, Name: name, TotalSteps: totalSteps, TotalElapsedSec: totalElapsedSec}
 	if err != nil {
 		ev.Error = err.Error()
 	}
@@ -296,17 +259,18 @@ func (c *ffiCallback) OnLog(level executor.LogLevel, message string, stepIdx int
 	case executor.LogError:
 		lvlStr = "error"
 	}
-	emitEvent(Event{Type: "log", Level: lvlStr, Message: message, StepIdx: stepIdx})
+	emitEvent(protocol.Event{Type: "log", Level: lvlStr, Message: message, StepIdx: stepIdx})
 }
 
 // ---------- 录制引擎 ----------
 
 // 录制器运行时状态。
-// recordMu 保护 recordCmdCh 和 recordRunning 的读写，防止并发竞态和重复启动。
+// recordMu 保护 recordCmdCh / recordQuit / recordRunning，防止并发竞态和重复启动。
 var (
 	recordMu      sync.Mutex
-	recordCmdCh   chan recorder.RecorderCommand // 接收 C# 命令
-	recordRunning bool                          // 防止重复启动
+	recordCmdCh   chan recorder.RecorderCommand
+	recordQuit    chan struct{}
+	recordRunning bool
 )
 
 //export RobotgoRecordStart
@@ -319,24 +283,45 @@ func RobotgoRecordStart(outPath, tplDir *C.char) (ret *C.char) {
 
 	outputPath := C.GoString(outPath)
 	templateDir := C.GoString(tplDir)
+	if outputPath == "" || templateDir == "" {
+		return C.CString(goErrorJSON("录制参数不完整: 输出路径与模板目录均为必填"))
+	}
 
-	// 加锁保护 recordCmdCh 创建和防重复启动
+	// 加锁保护通道创建和防重复启动
 	recordMu.Lock()
 	if recordRunning {
 		recordMu.Unlock()
 		return C.CString(goErrorJSON("录制器已在运行"))
 	}
-	recordCmdCh = make(chan recorder.RecorderCommand)
+	ch := make(chan recorder.RecorderCommand, recordCmdBuffer)
+	quit := make(chan struct{})
+	recordCmdCh = ch
+	recordQuit = quit
 	recordRunning = true
-	ch := recordCmdCh
 	recordMu.Unlock()
 
-	// 创建 channel 封装的 I/O
-	scanner := &channelScanner{ch: ch}
+	scanner := &channelScanner{ch: ch, quit: quit}
 	writer := &eventWriter{} // 将 emitEvent 封装为 io.Writer
 
 	// 在后台 goroutine 启动录制器
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				emitEvent(map[string]interface{}{
+					"type":    "record_error",
+					"message": fmt.Sprintf("录制器内部错误(panic): %v", r),
+				})
+			}
+			// 先清空状态再关闭 quit，唤醒可能阻塞在 Scan 上的读取协程。
+			// 命令通道不关闭：并发投递方可能仍持有引用，关闭会引发 panic。
+			recordMu.Lock()
+			recordRunning = false
+			recordCmdCh = nil
+			recordQuit = nil
+			recordMu.Unlock()
+			close(quit)
+		}()
+
 		r := recorder.NewPipeIO(outputPath, templateDir, scanner, writer)
 		if err := r.Run(); err != nil {
 			emitEvent(map[string]interface{}{
@@ -344,64 +329,68 @@ func RobotgoRecordStart(outPath, tplDir *C.char) (ret *C.char) {
 				"message": err.Error(),
 			})
 		}
-		// 录制结束，重置状态
-		recordMu.Lock()
-		recordRunning = false
-		recordMu.Unlock()
 	}()
 
 	return C.CString(`{"ok":true,"status":"started"}`)
 }
 
-//export RobotgoRecordCommand
-func RobotgoRecordCommand(cmdJSON *C.char) *C.char {
+// sendRecordCommand 向录制器投递命令，带超时避免 GUI 线程被无限阻塞。
+func sendRecordCommand(cmd recorder.RecorderCommand) (string, bool) {
 	recordMu.Lock()
 	ch := recordCmdCh
 	recordMu.Unlock()
 	if ch == nil {
-		return C.CString(`{"ok":false,"error":"录制器未启动"}`)
+		return goErrorJSON("录制器未启动"), false
 	}
+
+	timer := time.NewTimer(recordSendTimeout)
+	defer timer.Stop()
+	select {
+	case ch <- cmd:
+		return `{"ok":true}`, true
+	case <-timer.C:
+		return goErrorJSON("录制器无响应（命令投递超时）"), false
+	}
+}
+
+//export RobotgoRecordCommand
+func RobotgoRecordCommand(cmdJSON *C.char) *C.char {
 	var cmd recorder.RecorderCommand
 	if err := json.Unmarshal([]byte(C.GoString(cmdJSON)), &cmd); err != nil {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":"命令解析失败: %v"}`, err))
 	}
-	select {
-	case ch <- cmd:
-		return C.CString(`{"ok":true}`)
-	default:
-		return C.CString(`{"ok":false,"error":"录制器繁忙"}`)
-	}
+	result, _ := sendRecordCommand(cmd)
+	return C.CString(result)
 }
 
 //export RobotgoRecordStop
-func RobotgoRecordStop() {
-	recordMu.Lock()
-	ch := recordCmdCh
-	recordMu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- recorder.RecorderCommand{Type: "cancel"}:
-		default:
-		}
-	}
+func RobotgoRecordStop() *C.char {
+	result, _ := sendRecordCommand(recorder.RecorderCommand{Type: "cancel"})
+	return C.CString(result)
 }
 
 // channelScanner 将 Go channel 封装为 recorder.scannerInterface.
 // 通过实现 Scan/Bytes/Err 方法满足 interface 约束.
 type channelScanner struct {
 	ch      chan recorder.RecorderCommand
+	quit    <-chan struct{}
 	current recorder.RecorderCommand
 	ok      bool
 }
 
 func (s *channelScanner) Scan() bool {
-	cmd, ok := <-s.ch
-	if !ok {
+	select {
+	case cmd, ok := <-s.ch:
+		if !ok {
+			return false
+		}
+		s.current = cmd
+		s.ok = true
+		return true
+	case <-s.quit:
+		// 录制器已结束：解除阻塞，避免读取协程永久挂起
 		return false
 	}
-	s.current = cmd
-	s.ok = true
-	return true
 }
 
 func (s *channelScanner) Bytes() []byte {
@@ -443,13 +432,15 @@ func RobotgoCapture(name, outDir *C.char) (ret *C.char) {
 
 	elemName := C.GoString(name)
 	outputDir := C.GoString(outDir)
+	if elemName == "" || outputDir == "" {
+		return C.CString(goErrorJSON("截图参数不完整: 元素名与输出目录均为必填"))
+	}
 
-	result := dispatch(func() string {
-		if err := capture.CaptureInteractive(elemName, outputDir); err != nil {
-			return goErrorJSON("截图失败: " + err.Error())
-		}
-		absPath := filepath.Join(outputDir, elemName+".png")
-		return fmt.Sprintf(`{"ok":true,"path":%q}`, absPath)
-	})
-	return C.CString(result)
+	// 注意：此处不整体 dispatch —— capture 包内部已通过 SetSerialRunner 把每个
+	// robotgo 调用串行化到 dispatch goroutine，整体包裹会造成 dispatch 重入死锁。
+	if err := capture.CaptureInteractive(elemName, outputDir); err != nil {
+		return C.CString(goErrorJSON("截图失败: " + err.Error()))
+	}
+	absPath := filepath.Join(outputDir, elemName+".png")
+	return C.CString(fmt.Sprintf(`{"ok":true,"path":%q}`, absPath))
 }

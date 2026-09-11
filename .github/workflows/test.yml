@@ -71,3 +71,7 @@ jobs:
       - name: Build C# solution
         working-directory: src/csharp
         run: dotnet build RobotgoFlow.Wpf.sln -c Release
+
+      - name: Run C# unit tests
+        working-directory: src/csharp
+        run: dotnet test RobotgoFlow.Wpf.sln -c Release --no-build --logger "console;verbosity=normal"

@@ -1,3 +1,4 @@
+using System;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace RobotgoFlow.Tray.ViewModels;
@@ -21,7 +22,8 @@ public partial class ProgressViewModel : ObservableObject
         CurrentStep = idx + 1;
         TotalSteps = total;
         StepName = name;
-        Progress = (double)CurrentStep / total;
+        // total 为 0 时（异常协议数据）保持进度为 0，避免除零产生 NaN 让进度条异常
+        Progress = total > 0 ? Math.Clamp((double)CurrentStep / total, 0, 1) : 0;
         ProgressText = $"{(int)(Progress * 100)}%";
         if (estimatedSec > 0)
         {
@@ -53,5 +55,13 @@ public partial class ProgressViewModel : ObservableObject
         Progress = 1.0;
         ProgressText = "100%";
         EstimatedText = $"完成 · 耗时 {totalElapsedSec:F1} 秒";
+    }
+
+    /// <summary>用户主动停止执行：既非成功也非失败。</summary>
+    public void MarkStopped()
+    {
+        Status = "stopped";
+        CurrentAction = "已被用户停止";
+        EstimatedText = "已停止";
     }
 }

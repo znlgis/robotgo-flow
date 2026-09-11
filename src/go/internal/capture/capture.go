@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -15,6 +16,41 @@ import (
 
 	"robotgo-flow/internal/encoding"
 )
+
+// serialMu 保护 serialRunner 的读写。
+var (
+	serialMu     sync.RWMutex
+	serialRunner func(func())
+)
+
+// SetSerialRunner 注册一个串行化执行器：注册后本包内所有 robotgo 调用都会
+// 通过它执行（例如 DLL 模式下调度到专用 goroutine），保证底层 CGo 调用不跨线程并发。
+// 传入 nil 表示取消注册（默认行为：调用方 goroutine 直接执行）。
+// 注意：fn 内部不得再次调用 runSerial，否则会死锁。
+func SetSerialRunner(fn func(func())) {
+	serialMu.Lock()
+	serialRunner = fn
+	serialMu.Unlock()
+}
+
+// runSerial 在已注册的串行化执行器中运行 fn；未注册时直接运行。
+func runSerial(fn func()) {
+	serialMu.RLock()
+	runner := serialRunner
+	serialMu.RUnlock()
+	if runner == nil {
+		fn()
+		return
+	}
+	runner(fn)
+}
+
+// mouseLocation 读取当前鼠标位置（经串行化）。
+func mouseLocation() (int, int) {
+	var x, y int
+	runSerial(func() { x, y = robotgo.Location() })
+	return x, y
+}
 
 // CaptureRegion 截取屏幕指定区域并保存
 func CaptureRegion(x, y, w, h int, outputPath string) error {
@@ -45,7 +81,7 @@ func CaptureInteractive(name, outputDir string) error {
 		if _, err := in.ReadString('\n'); err != nil {
 			return 0, 0, fmt.Errorf("读取输入失败: %w", err)
 		}
-		x, y := robotgo.Location()
+		x, y := mouseLocation()
 		label := "起点"
 		if corner == "右下角" {
 			label = "终点"
@@ -69,7 +105,7 @@ func CaptureInteractivePipe(name, outputDir string) error {
 		if err := waitEnterPress(); err != nil {
 			return 0, 0, err
 		}
-		x, y := robotgo.Location()
+		x, y := mouseLocation()
 		label := "起点"
 		if corner == "右下角" {
 			label = "终点"
@@ -96,8 +132,10 @@ func captureRegionInteractive(name, outputDir string, getPoint func(string) (int
 		return fmt.Errorf("无效区域: 宽=%d 高=%d", w, h)
 	}
 	outputPath := filepath.Join(outputDir, name+".png")
-	if err := CaptureRegion(x1, y1, w, h, outputPath); err != nil {
-		return err
+	var captureErr error
+	runSerial(func() { captureErr = CaptureRegion(x1, y1, w, h, outputPath) })
+	if captureErr != nil {
+		return captureErr
 	}
 	fmt.Fprintf(out, "模板已保存: %s (%dx%d)\n", outputPath, w, h)
 	return nil
@@ -154,13 +192,14 @@ func isEnterDown() bool {
 	return (ret & 0x8000) != 0
 }
 
-// findBrowser 查找 Chrome/Edge 浏览器路径
+// findBrowser 查找本机已安装的 Chrome / Edge 路径，未安装时返回空字符串。
+// 保留该能力供模板截图与浏览器启动流程复用（由 capture_test.go 覆盖）。
 func findBrowser() string {
 	paths := []string{
-		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
-		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+		`C:Program FilesGoogleChromeApplicationchrome.exe`,
+		`C:Program Files (x86)GoogleChromeApplicationchrome.exe`,
+		`C:Program Files (x86)MicrosoftEdgeApplicationmsedge.exe`,
+		`C:Program FilesMicrosoftEdgeApplicationmsedge.exe`,
 	}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
@@ -169,3 +208,5 @@ func findBrowser() string {
 	}
 	return ""
 }
+
+

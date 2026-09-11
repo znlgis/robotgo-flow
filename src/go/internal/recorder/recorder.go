@@ -168,7 +168,7 @@ func (r *Recorder) askAction() *config.Action {
 }
 
 // askTemplateOrCoord 询问用户使用模板还是坐标
-func (r *Recorder) askTemplateOrCoord(actionType string) any {
+func (r *Recorder) askTemplateOrCoord() any {
 	fmt.Printf("  定位方式: 1.模板截图  2.屏幕坐标\n")
 	fmt.Print("  选择 [1-2]: ")
 	choice, _ := r.readLine()
@@ -212,7 +212,7 @@ func (r *Recorder) askTemplateOrCoord(actionType string) any {
 }
 
 func (r *Recorder) recordClick() *config.Action {
-	target := r.askTemplateOrCoord("click")
+	target := r.askTemplateOrCoord()
 	if target == nil {
 		return nil
 	}
@@ -220,7 +220,7 @@ func (r *Recorder) recordClick() *config.Action {
 }
 
 func (r *Recorder) recordDoubleClick() *config.Action {
-	target := r.askTemplateOrCoord("double_click")
+	target := r.askTemplateOrCoord()
 	if target == nil {
 		return nil
 	}
@@ -228,7 +228,7 @@ func (r *Recorder) recordDoubleClick() *config.Action {
 }
 
 func (r *Recorder) recordRightClick() *config.Action {
-	target := r.askTemplateOrCoord("right_click")
+	target := r.askTemplateOrCoord()
 	if target == nil {
 		return nil
 	}

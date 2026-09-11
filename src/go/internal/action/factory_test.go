@@ -43,6 +43,32 @@ func TestFromConfig_ClickCoord(t *testing.T) {
 	}
 }
 
+// click/double_click/right_click 支持 {template: 路径} 写法（与 wait 保持一致）
+func TestFromConfig_ClickTemplateMap(t *testing.T) {
+	act := config.Action{Click: map[string]interface{}{"template": "templates/btn.png"}}
+	r, err := FromConfig(act, 10)
+	if err != nil {
+		t.Fatalf("FromConfig() error = %v", err)
+	}
+	c, ok := r.(*ClickAction)
+	if !ok {
+		t.Fatalf("expected *ClickAction, got %T", r)
+	}
+	if c.template != "templates/btn.png" {
+		t.Errorf("template = %q, want %q", c.template, "templates/btn.png")
+	}
+	if c.coord != nil {
+		t.Error("coord 应为 nil（模板写法）")
+	}
+}
+
+func TestFromConfig_TemplateMapEmptyPath(t *testing.T) {
+	act := config.Action{Click: map[string]interface{}{"template": ""}}
+	if _, err := FromConfig(act, 10); err == nil {
+		t.Error("空模板路径应返回错误")
+	}
+}
+
 func TestFromConfig_DoubleClick(t *testing.T) {
 	act := config.Action{DoubleClick: "templates/item.png"}
 	r, err := FromConfig(act, 10)
@@ -315,8 +341,12 @@ func TestFromConfig_ClickInvalidType(t *testing.T) {
 	if err == nil {
 		t.Error("FromConfig() should fail for invalid click type")
 	}
-	if !strings.Contains(err.Error(), "需要字符串或 {x,y} 格式") {
+	// 错误信息需要同时说明期望格式与实际类型
+	if !strings.Contains(err.Error(), "实际为 int") {
 		t.Errorf("error = %v, should mention type issue", err)
+	}
+	if !strings.Contains(err.Error(), "{template}") {
+		t.Errorf("error = %v, should mention supported formats", err)
 	}
 }
 

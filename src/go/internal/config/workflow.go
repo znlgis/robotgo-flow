@@ -152,15 +152,30 @@ func (a *Action) ActionType() string {
 	}
 }
 
+// formatTarget 将目标定位字段渲染为可读文本：模板路径或屏幕坐标。
+func formatTarget(target any) string {
+	switch v := target.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		if s, ok := v["template"].(string); ok && s != "" {
+			return s
+		}
+		return fmt.Sprintf("坐标 (%v, %v)", v["x"], v["y"])
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 // Label 返回动作的中文显示标签，未设置时返回 "未知动作"。
 func (a *Action) Label() string {
 	switch {
 	case a.Click != nil:
-		return fmt.Sprintf("单击 (%v)", a.Click)
+		return fmt.Sprintf("单击 %s", formatTarget(a.Click))
 	case a.DoubleClick != nil:
-		return fmt.Sprintf("双击 (%v)", a.DoubleClick)
+		return fmt.Sprintf("双击 %s", formatTarget(a.DoubleClick))
 	case a.RightClick != nil:
-		return fmt.Sprintf("右键 (%v)", a.RightClick)
+		return fmt.Sprintf("右键 %s", formatTarget(a.RightClick))
 	case a.Drag != nil:
 		return fmt.Sprintf("拖拽 %s→%s", a.Drag.From, a.Drag.To)
 	case a.Type != nil:
@@ -170,7 +185,7 @@ func (a *Action) Label() string {
 	case len(a.Combo) > 0:
 		return fmt.Sprintf("组合键: %v", a.Combo)
 	case a.Wait != nil:
-		return fmt.Sprintf("等待模板: %v", a.Wait)
+		return fmt.Sprintf("等待模板: %s", formatTarget(a.Wait))
 	case a.WaitGone != "":
 		return fmt.Sprintf("等待消失: %s", a.WaitGone)
 	case a.Scroll != 0:
