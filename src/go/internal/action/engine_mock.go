@@ -1,6 +1,8 @@
 package action
 
 import (
+	"sync"
+
 	"robotgo-flow/internal/geom"
 )
 
@@ -11,7 +13,12 @@ type MockCall struct {
 }
 
 // MockEngine 提供供测试使用的假 Engine。所有字段公开以便测试配置。
+//
+// mu 保护可变状态（Calls / Screenshots / OpenedURLs / Find* 配置），
+// 允许测试 goroutine 与执行器并发访问而不触发数据竞争。
+// 直接读取公开字段（如 range eng.Calls）仅应在执行结束后进行。
 type MockEngine struct {
+	mu             sync.Mutex
 	Calls          []MockCall
 	FindResults    map[string]geom.Point
 	DefaultFind    geom.Point
@@ -38,6 +45,8 @@ type MockEngine struct {
 
 // Called 返回指定名称的方法是否被调用过至少一次。
 func (m *MockEngine) Called(methodName string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, c := range m.Calls {
 		if c.Name == methodName {
 			return true
@@ -48,6 +57,8 @@ func (m *MockEngine) Called(methodName string) bool {
 
 // CallCount 返回指定名称的方法被调用的次数。
 func (m *MockEngine) CallCount(methodName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	count := 0
 	for _, c := range m.Calls {
 		if c.Name == methodName {
@@ -59,6 +70,8 @@ func (m *MockEngine) CallCount(methodName string) int {
 
 // OnFindElement 配置 FindElement 对特定模板路径返回 pt。
 func (m *MockEngine) OnFindElement(path string, pt geom.Point) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.FindResults == nil {
 		m.FindResults = make(map[string]geom.Point)
 	}
@@ -67,21 +80,29 @@ func (m *MockEngine) OnFindElement(path string, pt geom.Point) {
 
 // OnAllFindElement 配置 FindElement 对不在 FindResults 中的任意模板返回 pt。
 func (m *MockEngine) OnAllFindElement(pt geom.Point) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.DefaultFind = pt
 }
 
 // SetFindError 强制 FindElement 忽略 FindResults/DefaultFind 并直接返回 err。
 func (m *MockEngine) SetFindError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.FindError = err
 }
 
 // SetClickError 强制 Click 返回 err。
 func (m *MockEngine) SetClickError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.ClickError = err
 }
 
 // FindCall 返回指定方法名的第一次调用记录，未找到返回 nil。
 func (m *MockEngine) FindCall(methodName string) *MockCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i := range m.Calls {
 		if m.Calls[i].Name == methodName {
 			return &m.Calls[i]
@@ -92,6 +113,8 @@ func (m *MockEngine) FindCall(methodName string) *MockCall {
 
 // LastCall 返回指定方法名的最后一次调用记录，未找到返回 nil。
 func (m *MockEngine) LastCall(methodName string) *MockCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for i := len(m.Calls) - 1; i >= 0; i-- {
 		if m.Calls[i].Name == methodName {
 			return &m.Calls[i]
@@ -101,6 +124,8 @@ func (m *MockEngine) LastCall(methodName string) *MockCall {
 }
 
 func (m *MockEngine) record(name string, args ...interface{}) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, MockCall{Name: name, Args: args})
 }
 
@@ -152,7 +177,10 @@ func (m *MockEngine) PressCombo(keys ...string) error {
 
 // FindElement 实现 Engine 接口。
 func (m *MockEngine) FindElement(templatePath string) (geom.Point, error) {
+	// record 自持锁，与下方配置读取分开两个临界区，避免重入死锁。
 	m.record("FindElement", templatePath)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.FindError != nil {
 		return geom.Point{}, m.FindError
 	}
@@ -215,6 +243,8 @@ func (m *MockEngine) SwitchTab(index int) error {
 // OpenURL 实现 Engine 接口。
 func (m *MockEngine) OpenURL(url string) {
 	m.record("OpenURL", url)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.OpenedURLs = append(m.OpenedURLs, url)
 }
 
@@ -232,6 +262,8 @@ func (m *MockEngine) Wait(ms int) {
 // CaptureScreen 实现 Engine 接口。
 func (m *MockEngine) CaptureScreen(filename string) string {
 	m.record("CaptureScreen", filename)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Screenshots = append(m.Screenshots, filename)
 	return filename
 }

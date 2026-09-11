@@ -20,6 +20,10 @@ try {
     # -- Prerequisites --
     Write-Host "[1/3] Checking environment..." -ForegroundColor Cyan
 
+    # 显式启用 CGO：robotgo/bitmap 依赖 CGO，若宿主环境 CGO_ENABLED=0
+    # （如某些 shell 默认值）会导致 "build constraints exclude all Go files" 类错误
+    $env:CGO_ENABLED = "1"
+
     try { $null = go version 2>&1 } catch {
         Write-Host "ERROR: Go not found. Please install Go 1.26+" -ForegroundColor Red
         exit 1

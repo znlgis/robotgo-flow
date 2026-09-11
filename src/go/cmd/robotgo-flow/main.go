@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"robotgo-flow/internal/capture"
 	"robotgo-flow/internal/config"
@@ -62,6 +63,51 @@ func printUsage() {
 	fmt.Println("  -h, --help                        显示帮助")
 }
 
+// reorderFlags 把 args 中的 flag 参数移到位置参数之前，返回重排后的切片。
+// 背景：标准 flag 包遇到第一个位置参数即停止解析，导致
+// `run workflow.yaml --from 3` 中的 `--from 3` 被静默忽略、工作流从头执行。
+// 重排后该写法与 `run --from 3 workflow.yaml` 完全等价。
+//
+// 规则：
+//   - `-flag value` 形式（非 bool flag）的值一并前移，与 flag 包取值规则一致
+//   - `-flag=value` 形式自带值，单独前移
+//   - bool flag 不带独立值，单独前移
+//   - `--` 终止符之后（含自身）全部按位置参数处理，保持原顺序
+//   - 单独的 `-` 与空串视为位置参数
+func reorderFlags(fs *flag.FlagSet, args []string) []string {
+	// 收集 bool flag 名单：这类 flag 后面不跟独立值。
+	boolFlags := make(map[string]bool)
+	fs.VisitAll(func(f *flag.Flag) {
+		if bv, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bv.IsBoolFlag() {
+			boolFlags[f.Name] = true
+		}
+	})
+
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			// 终止符：其后（含自身）全部按位置参数处理
+			positional = append(positional, args[i:]...)
+			break
+		}
+		if len(a) > 1 && a[0] == '-' {
+			flags = append(flags, a)
+			name := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+			if !strings.Contains(name, "=") && !boolFlags[name] {
+				// 需要值的 flag：把紧跟的 token 作为值一并前移
+				if i+1 < len(args) {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+			continue
+		}
+		positional = append(positional, a)
+	}
+	return append(flags, positional...)
+}
+
 // ---------- run 子命令 ----------
 
 func cmdRun(args []string) {
@@ -76,7 +122,7 @@ func cmdRun(args []string) {
 		fmt.Println("选项:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "错误: 请指定工作流文件")
@@ -162,7 +208,7 @@ func cmdRecord(args []string) {
 		fmt.Println("选项:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 
 	absOut, err := filepath.Abs(*out)
 	if err != nil {
@@ -204,7 +250,7 @@ func cmdCapture(args []string) {
 		fmt.Println("选项:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 
 	name := "element"
 	if fs.NArg() >= 1 {
@@ -231,7 +277,7 @@ func cmdServe(args []string) {
 		fmt.Println("选项:")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	fs.Parse(reorderFlags(fs, args))
 
 	if fs.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "用法: robotgo-flow serve <工作流文件>")
